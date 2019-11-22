@@ -14,7 +14,6 @@
 use std::default::Default;
 use std::sync::{Arc, Mutex};
 
-use crate::authenticator::{DefaultHyperClient, HyperClientBuilder};
 use crate::storage::{hash_scopes, MemoryStorage, TokenStorage};
 use crate::types::{ApplicationSecret, GetToken, JsonError, RequestError, StringError, Token};
 
@@ -189,36 +188,21 @@ where
 /// (and you also should not) use this with `Authenticator`. Just use it directly.
 #[derive(Clone)]
 pub struct ServiceAccountAccess<C> {
-    client: C,
+    client: hyper::Client<C>,
     key: ServiceAccountKey,
     sub: Option<String>,
 }
 
-impl ServiceAccountAccess<DefaultHyperClient> {
-    /// Create a new ServiceAccountAccess with the provided key.
-    pub fn new(key: ServiceAccountKey) -> Self {
-        ServiceAccountAccess {
-            client: DefaultHyperClient,
-            key,
-            sub: None,
-        }
-    }
-}
-
 impl<C> ServiceAccountAccess<C>
 where
-    C: HyperClientBuilder,
-    C::Connector: 'static,
+    C: hyper::client::connect::Connect + 'static,
 {
-    /// Use the provided hyper client.
-    pub fn hyper_client<NewC: HyperClientBuilder>(
-        self,
-        hyper_client: NewC,
-    ) -> ServiceAccountAccess<NewC> {
+    /// Create a new ServiceAccountAccess with the provided key.
+    pub fn new<Client: Into<hyper::Client<C>>>(key: ServiceAccountKey, client: Client) -> Self {
         ServiceAccountAccess {
-            client: hyper_client,
-            key: self.key,
-            sub: self.sub,
+            client: client.into(),
+            key,
+            sub: None,
         }
     }
 
@@ -232,7 +216,7 @@ where
 
     /// Build the configured ServiceAccountAccess.
     pub fn build(self) -> impl GetToken {
-        ServiceAccountAccessImpl::new(self.client.build_hyper_client(), self.key, self.sub)
+        ServiceAccountAccessImpl::new(self.client, self.key, self.sub)
     }
 }
 
@@ -515,8 +499,7 @@ mod tests {
                 .with_header("content-type", "text/json")
                 .with_body(bad_json_response)
                 .create();
-            let mut acc = ServiceAccountAccess::new(key.clone())
-                .hyper_client(client.clone())
+            let mut acc = ServiceAccountAccess::new(key.clone(), client.clone())
                 .build();
             let fut = acc
                 .token(vec!["https://www.googleapis.com/auth/pubsub"])
@@ -543,7 +526,7 @@ mod tests {
         let client = hyper::Client::builder()
             .executor(runtime.executor())
             .build(https);
-        let mut acc = ServiceAccountAccess::new(key).hyper_client(client).build();
+        let mut acc = ServiceAccountAccess::new(key, client).build();
         println!(
             "{:?}",
             acc.token(vec!["https://www.googleapis.com/auth/pubsub"])
